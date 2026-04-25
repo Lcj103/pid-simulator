@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PID 模拟器 - 一维小球位置控制</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #1a1d23;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', sans-serif;
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+  min-height: 100vh;
+}
+.app {
+  max-width: 960px;
+  width: 100%;
+}
+h1 {
+  text-align: center;
+  margin-bottom: 12px;
+  font-size: 1.6em;
+  letter-spacing: 2px;
+}
+canvas {
+  display: block;
+  width: 100%;
+  background: #21252b;
+  border-radius: 8px;
+  border: 1px solid #333;
+  margin-bottom: 12px;
+}
+.controls {
+  background: #21252b;
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px 20px;
+  margin-bottom: 12px;
+}
+.control-group { display:flex; flex-direction:column; gap:4px; }
+.control-group label { font-size:0.78em; color:#999; text-transform:uppercase; letter-spacing:1px; }
+.control-group input[type=range] { width:100%; accent-color:#4fc3f7; }
+.control-group input[type=number] {
+  background:#2c313a; border:1px solid #444; color:#e0e0e0;
+  padding:4px 8px; border-radius:4px; width:100%; font-size:0.9em;
+}
+.control-group span { font-size:0.8em; color:#4fc3f7; }
+
+.buttons {
+  display:flex; gap:10px; margin-bottom: 12px; flex-wrap:wrap;
+}
+button {
+  padding: 8px 20px; border:none; border-radius:6px; cursor:pointer;
+  font-size:0.9em; font-weight:600; letter-spacing:0.5px;
+  transition: background 0.2s;
+}
+.btn-start { background:#4caf50; color:#fff; }
+.btn-reset { background:#ff9800; color:#fff; }
+.btn-disturb { background:#f44336; color:#fff; }
+.btn-mode { background:#7c4dff; color:#fff; }
+button:hover { filter:brightness(1.15); }
+button:active { transform:scale(0.97); }
+
+.data-row {
+  display:flex; gap:20px; background:#21252b; border-radius:8px;
+  padding: 12px 20px; font-size:0.85em; flex-wrap:wrap;
+}
+.data-item { display:flex; gap:8px; align-items:center; }
+.data-item .key { color:#999; }
+.data-item .val { color:#4fc3f7; font-weight:bold; font-family:monospace; font-size:1.05em; }
+
+.inner-pid { display:none; }
+.inner-pid.show { display:flex; gap:10px; }
+
+.cascade-hint {
+  font-size:0.7em; color:#7c4dff;
+  margin-top:2px;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>PID 模拟器 — 一维小球位置控制</h1>
+  <canvas id="canvas" height="400"></canvas>
+  <canvas id="plotCanvas" height="220"></canvas>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>控制模式</label>
+      <button class="btn-mode" id="btnMode" onclick="toggleMode()">单级 PID</button>
+    </div>
+    <div class="control-group">
+      <label>目标位置 <span id="targetVal">3.00</span> m</label>
+      <input type="range" id="targetPos" min="-5" max="5" step="0.01" value="3" oninput="onTargetChange(this.value)">
+    </div>
+    <div class="control-group">
+      <label>仿真速度 <span id="speedVal">1.0x</span></label>
+      <input type="range" id="simSpeed" min="0.1" max="5" step="0.1" value="1" oninput="onSpeedChange(this.value)">
+    </div>
+    <div class="control-group"></div>
+
+    <div class="control-group">
+      <label>Kp₁ (外环比例) <span id="kp1Val">15.00</span></label>
+      <input type="range" id="kp1" min="0" max="100" step="0.1" value="15" oninput="onParamChange()">
+      <span class="cascade-hint" id="kp1Hint">单级: 位置→力 | 串级: 位置→速度</span>
+    </div>
+    <div class="control-group">
+      <label>Ki₁ (外环积分) <span id="ki1Val">2.00</span></label>
+      <input type="range" id="ki1" min="0" max="50" step="0.1" value="2" oninput="onParamChange()">
+    </div>
+    <div class="control-group">
+      <label>Kd₁ (外环微分) <span id="kd1Val">3.00</span></label>
+      <input type="range" id="kd1" min="0" max="50" step="0.1" value="3" oninput="onParamChange()">
+    </div>
+    <div class="control-group">
+      <label>阻尼 <span id="dampingVal">1.00</span></label>
+      <input type="range" id="damping" min="0" max="10" step="0.1" value="1" oninput="onParamChange()">
+    </div>
+
+    <div class="control-group inner-pid" id="innerGroup">
+      <label>Kp₂ (内环比例) <span id="kp2Val">8.00</span></label>
+      <input type="range" id="kp2" min="0" max="100" step="0.1" value="8" oninput="onParamChange()">
+      <span class="cascade-hint">串级: 速度→力</span>
+    </div>
+    <div class="control-group inner-pid" id="innerGroup2">
+      <label>Ki₂ (内环积分) <span id="ki2Val">0.50</span></label>
+      <input type="range" id="ki2" min="0" max="50" step="0.1" value="0.5" oninput="onParamChange()">
+    </div>
+    <div class="control-group inner-pid" id="innerGroup3">
+      <label>Kd₂ (内环微分) <span id="kd2Val">1.00</span></label>
+      <input type="range" id="kd2" min="0" max="50" step="0.1" value="1" oninput="onParamChange()">
+    </div>
+    <div class="control-group">
+      <label>质量 <span id="massVal">1.00</span> kg</label>
+      <input type="range" id="mass" min="0.1" max="10" step="0.1" value="1" oninput="onParamChange()">
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button class="btn-start" id="btnStart" onclick="toggleRun()">▶ 启动</button>
+    <button class="btn-reset" onclick="resetSim()">↺ 重置</button>
+    <button class="btn-disturb" onclick="disturb()">⚡ 扰动</button>
+  </div>
+
+  <div class="data-row" style="margin-top:12px;">
+    <div class="data-item"><span class="key">当前位置:</span><span class="val" id="posDisplay">0.000 m</span></div>
+    <div class="data-item"><span class="key">当前速度:</span><span class="val" id="velDisplay">0.000 m/s</span></div>
+    <div class="data-item"><span class="key">位置误差:</span><span class="val" id="errDisplay">0.000 m</span></div>
+    <div class="data-item"><span class="key">施加力:</span><span class="val" id="forceDisplay">0.00 N</span></div>
+    <div class="data-item" id="velSPItem" style="display:none;"><span class="key">速度设定值:</span><span class="val" id="velSPDisplay">0.000 m/s</span></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let width, height, trackY, trackX1, trackX2, trackLen;
+
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  width = canvas.width;
+  height = canvas.height;
+  trackY = height * 0.5;
+  trackX1 = width * 0.08;
+  trackX2 = width * 0.92;
+  trackLen = trackX2 - trackX1;
+}
+resize();
+window.addEventListener('resize', resize);
+
+function mToX(m) { return trackX1 + (m + 5) / 10 * trackLen; }
+function xToM(x) { return (x - trackX1) / trackLen * 10 - 5; }
+
+class PID {
+  constructor() {
+    this.Kp = 0; this.Ki = 0; this.Kd = 0;
+    this.integral = 0; this.prevError = 0;
+    this.maxOut = 50;
+    this.hasPrev = false;
+  }
+  reset() { this.integral = 0; this.prevError = 0; this.hasPrev = false; }
+  update(setpoint, measured, dt) {
+    const error = setpoint - measured;
+    this.integral += error * dt;
+    // anti-windup: clamp integrator
+    if (this.Ki > 0) {
+      const iMax = this.maxOut / this.Ki;
+      if (this.integral > iMax) this.integral = iMax;
+      if (this.integral < -iMax) this.integral = -iMax;
+    }
+    let deriv = 0;
+    if (this.hasPrev && dt > 0) deriv = (error - this.prevError) / dt;
+    this.prevError = error;
+    this.hasPrev = true;
+    let out = this.Kp * error + this.Ki * this.integral + this.Kd * deriv;
+    if (out > this.maxOut) out = this.maxOut;
+    if (out < -this.maxOut) out = -this.maxOut;
+    return out;
+  }
+}
+
+let ball = { pos:0, vel:0 };
+let singlePID = new PID();
+let cascadeOuter = new PID();
+let cascadeInner = new PID();
+let running = false;
+let cascadeMode = false;
+let targetPos = 3;
+let lastForce = 0;
+let lastVelSP = 0;
+
+// Time-history for position plot
+const PLOT_WINDOW = 15; // seconds
+let posHistory = [];
+let targetHistory = [];
+let timeHistory = [];
+let simTime = 0;
+let lastTargetPos = 3;
+
+function getParams() {
+  return {
+    kp1: parseFloat(document.getElementById('kp1').value),
+    ki1: parseFloat(document.getElementById('ki1').value),
+    kd1: parseFloat(document.getElementById('kd1').value),
+    kp2: parseFloat(document.getElementById('kp2').value),
+    ki2: parseFloat(document.getElementById('ki2').value),
+    kd2: parseFloat(document.getElementById('kd2').value),
+    damping: parseFloat(document.getElementById('damping').value),
+    mass: parseFloat(document.getElementById('mass').value),
+    speed: parseFloat(document.getElementById('simSpeed').value),
+  };
+}
+
+function toggleMode() {
+  cascadeMode = !cascadeMode;
+  const btn = document.getElementById('btnMode');
+  btn.textContent = cascadeMode ? '串级 PID' : '单级 PID';
+  btn.style.background = cascadeMode ? '#00bfa5' : '#7c4dff';
+  const innerEls = document.querySelectorAll('.inner-pid');
+  innerEls.forEach(el => el.classList.toggle('show', cascadeMode));
+  document.getElementById('velSPItem').style.display = cascadeMode ? 'flex' : 'none';
+  document.getElementById('kp1Hint').textContent = cascadeMode ? '串级: 位置→速度设定值' : '单级: 位置→力';
+  resetSim();
+}
+
+function toggleRun() {
+  running = !running;
+  document.getElementById('btnStart').textContent = running ? '⏸ 暂停' : '▶ 启动';
+  document.getElementById('btnStart').style.background = running ? '#ff9800' : '#4caf50';
+  if (running) lastTime = null;
+}
+
+function resetSim() {
+  ball.pos = 0; ball.vel = 0; lastForce = 0; lastVelSP = 0;
+  singlePID.reset(); cascadeOuter.reset(); cascadeInner.reset();
+  posHistory = []; targetHistory = []; timeHistory = []; simTime = 0;
+  document.getElementById('posDisplay').textContent = '0.000 m';
+  document.getElementById('velDisplay').textContent = '0.000 m/s';
+  document.getElementById('errDisplay').textContent = '0.000 m';
+  document.getElementById('forceDisplay').textContent = '0.00 N';
+  document.getElementById('velSPDisplay').textContent = '0.000 m/s';
+}
+
+function disturb() {
+  const force = (Math.random() - 0.5) * 40;
+  ball.vel += force / getParams().mass * 0.05;
+}
+
+function onTargetChange(v) {
+  targetPos = parseFloat(v);
+  document.getElementById('targetVal').textContent = targetPos.toFixed(2);
+}
+
+function onSpeedChange(v) {
+  document.getElementById('speedVal').textContent = parseFloat(v).toFixed(1) + 'x';
+}
+
+function onParamChange() {
+  const p = getParams();
+  document.getElementById('kp1Val').textContent = p.kp1.toFixed(2);
+  document.getElementById('ki1Val').textContent = p.ki1.toFixed(2);
+  document.getElementById('kd1Val').textContent = p.kd1.toFixed(2);
+  document.getElementById('kp2Val').textContent = p.kp2.toFixed(2);
+  document.getElementById('ki2Val').textContent = p.ki2.toFixed(2);
+  document.getElementById('kd2Val').textContent = p.kd2.toFixed(2);
+  document.getElementById('dampingVal').textContent = p.damping.toFixed(2);
+  document.getElementById('massVal').textContent = p.mass.toFixed(2);
+}
+
+let lastTime = null;
+const FIXED_DT = 0.016; // ~60fps base dt
+
+function step(dt) {
+  if (!running) { lastTime = null; return; }
+  const p = getParams();
+  dt = Math.min(dt * p.speed, 0.1); // clamp large dt
+
+  // Update PID controllers
+  singlePID.Kp = p.kp1; singlePID.Ki = p.ki1; singlePID.Kd = p.kd1;
+  cascadeOuter.Kp = p.kp1; cascadeOuter.Ki = p.ki1; cascadeOuter.Kd = p.kd1;
+  cascadeInner.Kp = p.kp2; cascadeInner.Ki = p.ki2; cascadeInner.Kd = p.kd2;
+
+  let force;
+  if (cascadeMode) {
+    lastVelSP = cascadeOuter.update(targetPos, ball.pos, dt);
+    // clamp velocity setpoint
+    if (lastVelSP > 20) lastVelSP = 20;
+    if (lastVelSP < -20) lastVelSP = -20;
+    force = cascadeInner.update(lastVelSP, ball.vel, dt);
+  } else {
+    force = singlePID.update(targetPos, ball.pos, dt);
+  }
+
+  // Compute friction (Coulomb + viscous)
+  let friction = -p.damping * ball.vel;
+  // static friction modeling: if velocity is tiny and net force small, stop
+  if (Math.abs(ball.vel) < 0.001 && Math.abs(force + friction) < 0.5) {
+    ball.vel = 0;
+    friction = 0;
+  }
+
+  const netForce = force + friction;
+  const accel = netForce / p.mass;
+
+  // Euler integration
+  ball.vel += accel * dt;
+  ball.pos += ball.vel * dt;
+
+  // boundary bounce
+  if (ball.pos > 5) { ball.pos = 5; ball.vel *= -0.5; }
+  if (ball.pos < -5) { ball.pos = -5; ball.vel *= -0.5; }
+
+  lastForce = force;
+
+  // Record position history
+  simTime += dt;
+  posHistory.push(ball.pos);
+  targetHistory.push(targetPos);
+  timeHistory.push(simTime);
+  // Keep only the PLOT_WINDOW window
+  const cutoff = simTime - PLOT_WINDOW;
+  while (timeHistory.length > 0 && timeHistory[0] < cutoff) {
+    timeHistory.shift();
+    posHistory.shift();
+    targetHistory.shift();
+  }
+  lastTargetPos = targetPos;
+
+  // Update display
+  document.getElementById('posDisplay').textContent = ball.pos.toFixed(3) + ' m';
+  document.getElementById('velDisplay').textContent = ball.vel.toFixed(3) + ' m/s';
+  document.getElementById('errDisplay').textContent = (targetPos - ball.pos).toFixed(3) + ' m';
+  document.getElementById('forceDisplay').textContent = lastForce.toFixed(2) + ' N';
+  if (cascadeMode) {
+    document.getElementById('velSPDisplay').textContent = lastVelSP.toFixed(3) + ' m/s';
+  }
+}
+
+const plotCanvas = document.getElementById('plotCanvas');
+const pctx = plotCanvas.getContext('2d');
+let pw, ph, pTop, pBottom, pLeft, pRight, pH;
+
+function resizePlot() {
+  const rect = plotCanvas.parentElement.getBoundingClientRect();
+  plotCanvas.width = rect.width;
+  pw = plotCanvas.width;
+  ph = plotCanvas.height;
+  pLeft = pw * 0.08;
+  pRight = pw * 0.95;
+  pTop = 14;
+  pBottom = ph - 28;
+  pH = pBottom - pTop;
+}
+resizePlot();
+window.addEventListener('resize', () => { resize(); resizePlot(); });
+
+function plotX(t) { return pLeft + (t / PLOT_WINDOW) * (pRight - pLeft); }
+function plotY(pos) { return pTop + (5 - pos) / 10 * pH; }
+
+function drawPlot() {
+  const w = plotCanvas.width, h = plotCanvas.height;
+  pctx.clearRect(0, 0, w, h);
+
+  // background
+  pctx.fillStyle = '#1a1d23';
+  pctx.fillRect(pLeft, pTop, pRight - pLeft, pH);
+
+  // horizontal grid lines
+  pctx.strokeStyle = '#2a2d35';
+  pctx.lineWidth = 1;
+  for (let y = -5; y <= 5; y++) {
+    const py = plotY(y);
+    pctx.beginPath(); pctx.moveTo(pLeft, py); pctx.lineTo(pRight, py); pctx.stroke();
+    pctx.fillStyle = '#666';
+    pctx.font = '10px monospace';
+    pctx.textAlign = 'right';
+    pctx.fillText(y + '', pLeft - 4, py + 3);
+  }
+
+  // Y axis label
+  pctx.save();
+  pctx.fillStyle = '#999';
+  pctx.font = '11px sans-serif';
+  pctx.textAlign = 'center';
+  pctx.translate(10, pTop + pH / 2);
+  pctx.rotate(-Math.PI / 2);
+  pctx.fillText('位置 (m)', 0, 0);
+  pctx.restore();
+
+  // X axis label
+  pctx.fillStyle = '#999';
+  pctx.font = '11px sans-serif';
+  pctx.textAlign = 'center';
+  pctx.fillText('时间 (秒)', pLeft + (pRight - pLeft) / 2, h - 4);
+
+  // time tick marks on X
+  pctx.textAlign = 'center';
+  for (let t = 0; t <= PLOT_WINDOW; t += 5) {
+    const px = plotX(t);
+    pctx.fillStyle = '#666';
+    pctx.font = '10px monospace';
+    pctx.fillText(t + 's', px, pBottom + 14);
+    pctx.strokeStyle = '#2a2d35';
+    pctx.beginPath(); pctx.moveTo(px, pTop); pctx.lineTo(px, pBottom); pctx.stroke();
+  }
+
+  // draw target line
+  if (targetHistory.length > 1) {
+    pctx.strokeStyle = '#ff5252';
+    pctx.lineWidth = 2;
+    pctx.setLineDash([5, 3]);
+    pctx.beginPath();
+    for (let i = 0; i < timeHistory.length; i++) {
+      const x = plotX(timeHistory[i]);
+      const y = plotY(targetHistory[i]);
+      if (i === 0) pctx.moveTo(x, y); else pctx.lineTo(x, y);
+    }
+    pctx.stroke();
+    pctx.setLineDash([]);
+
+    if (timeHistory.length > 0) {
+      const lastT = timeHistory[timeHistory.length - 1];
+      const lastTarget = targetHistory[targetHistory.length - 1];
+      pctx.fillStyle = '#ff5252';
+      pctx.font = '10px sans-serif';
+      pctx.textAlign = 'left';
+      pctx.fillText('目标', plotX(lastT) + 3, plotY(lastTarget) + 2);
+    }
+  }
+
+  // draw ball position line
+  if (posHistory.length > 1) {
+    pctx.strokeStyle = '#4fc3f7';
+    pctx.lineWidth = 2.5;
+    pctx.shadowColor = '#4fc3f7';
+    pctx.shadowBlur = 6;
+    pctx.beginPath();
+    for (let i = 0; i < timeHistory.length; i++) {
+      const x = plotX(timeHistory[i]);
+      const y = plotY(posHistory[i]);
+      if (i === 0) pctx.moveTo(x, y); else pctx.lineTo(x, y);
+    }
+    pctx.stroke();
+    pctx.shadowBlur = 0;
+
+    const lastTP = timeHistory[timeHistory.length - 1];
+    const lastPos = posHistory[posHistory.length - 1];
+    pctx.fillStyle = '#4fc3f7';
+    pctx.font = '10px sans-serif';
+    pctx.textAlign = 'left';
+    pctx.fillText('小球', plotX(lastTP) + 3, plotY(lastPos) + 2);
+  }
+
+  // X axis line
+  pctx.strokeStyle = '#444';
+  pctx.lineWidth = 1;
+  pctx.beginPath(); pctx.moveTo(pLeft, pBottom); pctx.lineTo(pRight, pBottom); pctx.stroke();
+
+  // title
+  pctx.fillStyle = '#999';
+  pctx.font = '12px sans-serif';
+  pctx.textAlign = 'left';
+  pctx.fillText('位置-时间响应曲线 (滚动窗口 ' + PLOT_WINDOW + 's)', pLeft, pTop - 2);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, width, height);
+
+  // grid
+  ctx.strokeStyle = '#2a2d35';
+  ctx.lineWidth = 1;
+  for (let x = trackX1; x <= trackX2; x += trackLen / 10) {
+    ctx.beginPath(); ctx.moveTo(x, trackY - 30); ctx.lineTo(x, trackY + 30); ctx.stroke();
+  }
+
+  // track line
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(trackX1, trackY); ctx.lineTo(trackX2, trackY); ctx.stroke();
+
+  // end caps
+  ctx.fillStyle = '#555';
+  ctx.fillRect(trackX1 - 6, trackY - 12, 8, 24);
+  ctx.fillRect(trackX2 - 2, trackY - 12, 8, 24);
+
+  // tick marks and labels
+  ctx.fillStyle = '#777';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  for (let i = -5; i <= 5; i++) {
+    const x = mToX(i);
+    ctx.beginPath(); ctx.moveTo(x, trackY - 8); ctx.lineTo(x, trackY + 8); ctx.strokeStyle = '#666';
+    ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillText(i + 'm', x, trackY + 22);
+  }
+
+  // target marker
+  const tx = mToX(targetPos);
+  ctx.fillStyle = '#ff5252';
+  ctx.beginPath(); ctx.moveTo(tx, trackY - 35); ctx.lineTo(tx - 10, trackY - 48);
+  ctx.lineTo(tx + 10, trackY - 48); ctx.closePath(); ctx.fill();
+  ctx.fillText('目标', tx, trackY - 52);
+
+  // force arrow
+  if (Math.abs(lastForce) > 0.1 && running) {
+    const bx = mToX(ball.pos);
+    const arrowLen = Math.min(Math.abs(lastForce) * 4, 80);
+    const dir = Math.sign(lastForce);
+    ctx.strokeStyle = lastForce > 0 ? '#66bb6a' : '#ef5350';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(bx, trackY - 25);
+    ctx.lineTo(bx + dir * arrowLen, trackY - 25); ctx.stroke();
+    // arrowhead
+    ctx.fillStyle = lastForce > 0 ? '#66bb6a' : '#ef5350';
+    ctx.beginPath();
+    ctx.moveTo(bx + dir * arrowLen, trackY - 25);
+    ctx.lineTo(bx + dir * arrowLen - dir * 8, trackY - 30);
+    ctx.lineTo(bx + dir * arrowLen - dir * 8, trackY - 20);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // ball
+  const bx = mToX(ball.pos);
+  const by = trackY;
+  // color based on velocity
+  const absV = Math.abs(ball.vel);
+  const r = Math.min(180, Math.floor(66 + absV * 20));
+  const g = Math.max(100, Math.floor(200 - absV * 15));
+  const b = Math.min(200, Math.floor(100 + absV * 15));
+  const grad = ctx.createRadialGradient(bx - 3, by - 4, 2, bx, by, 16);
+  grad.addColorStop(0, `rgb(${Math.min(255,r+40)},${Math.min(255,g+40)},${Math.min(255,b+40)})`);
+  grad.addColorStop(1, `rgb(${r},${g},${b})`);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(bx, by, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // ball label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(ball.pos.toFixed(2) + 'm', bx, by - 22);
+
+  // velocity indicator above ball
+  if (running && Math.abs(ball.vel) > 0.01) {
+    const vx = bx + ball.vel * 3;
+    ctx.strokeStyle = '#4fc3f7';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(bx, by - 18); ctx.lineTo(vx, by - 18); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // legend
+  ctx.fillStyle = '#999';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left';
+  const modeLabel = cascadeMode ? '串级 PID' : '单级 PID';
+  ctx.fillText(`模式: ${modeLabel}`, 12, 22);
+}
+
+function loop(timestamp) {
+  if (!running) {
+    draw();
+    requestAnimationFrame(loop);
+    return;
+  }
+  if (lastTime === null) lastTime = timestamp;
+  let dt = (timestamp - lastTime) / 1000;
+  if (dt <= 0) dt = 0.001;
+  lastTime = timestamp;
+  step(dt);
+  draw();
+  drawPlot();
+  requestAnimationFrame(loop);
+}
+
+// Initialize
+resetSim();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
